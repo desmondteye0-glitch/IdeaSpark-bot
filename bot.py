@@ -9,12 +9,13 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-import anthropic
+import google.generativeai as genai
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,16 +94,10 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = prompt_template.format(topic=topic)
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=800,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        ideas_text = "".join(
-            block.text for block in response.content if block.type == "text"
-        )
+        response = model.generate_content(prompt)
+        ideas_text = response.text
     except Exception as e:
-        logger.exception("Claude API error")
+        logger.exception("Gemini API error")
         await update.message.reply_text(
             "Something went wrong generating ideas. Try again in a moment."
         )

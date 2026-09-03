@@ -16,6 +16,7 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-3.5-flash")
+image_model = genai.GenerativeModel("gemini-2.5-flash-image")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -57,6 +58,14 @@ FIXED_NICHES = [
 def call_gemini(prompt: str) -> str:
     response = model.generate_content(prompt)
     return response.text.strip()
+
+
+def generate_image(prompt: str):
+    response = image_model.generate_content(prompt)
+    for part in response.candidates[0].content.parts:
+        if hasattr(part, "inline_data") and part.inline_data is not None:
+            return part.inline_data.data
+    return None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -146,6 +155,7 @@ async def generate_full_package(query, context, state):
         "in brackets. Do not add any preamble or explanation, just the script."
     )
     script = call_gemini(script_prompt)
+    await query.message.reply_text(f"📝 SCRIPT\n━━━━━━━━━━━━━━━\n\n{script}")
 
     image_prompt_prompt = (
         f"Write one detailed AI image-generation prompt (for tools like Midjourney "
@@ -155,25 +165,37 @@ async def generate_full_package(query, context, state):
     )
     image_prompt = call_gemini(image_prompt_prompt)
 
+    await query.message.reply_text(f"🖼 IMAGE PROMPT\n━━━━━━━━━━━━━━━\n\n{image_prompt}")
+
+    await query.message.chat.send_action("upload_photo")
+    try:
+        image_bytes = generate_image(image_prompt)
+        if image_bytes:
+            await query.message.reply_photo(photo=image_bytes)
+        else:
+            await query.message.reply_text("(Image generation returned no image, try again)")
+    except Exception:
+        logger.exception("Image generation error")
+        await query.message.reply_text("(Image generation failed, but the prompt above still works in other tools)")
+
     video_prompt_prompt = (
         f"Here is a video script:\n\n{script}\n\n"
         f"Write one detailed AI video-generation prompt (for tools like Runway, "
         f"Luma, or Sora) that brings this exact script to life as a video. "
-        "The prompt must describe: the setting/scene, what the character looks "
-        "like, the specific actions the character performs (matching the stage "
-        "directions and reactions in the script above), and the exact dialogue "
-        "lines the character should be saying at each moment, in sync with those "
-        "actions. Keep the dialogue verbatim from the script. Describe camera "
-        "movement, pacing, and mood throughout. "
+        "Start with 2-3 sentences describing the overall setting, character "
+        "appearance, camera style, and mood. Then, on a new line, write "
+        "'Beat-by-beat:' followed by a numbered list where each number is the "
+        "character's action plus the exact dialogue line at that moment, "
+        "matching the stage directions and reactions in the script above. "
+        "Keep dialogue verbatim from the script. Put a blank line between each "
+        "numbered beat so it's easy to read. "
         "Return ONLY the prompt text, no extra commentary."
     )
     video_prompt = call_gemini(video_prompt_prompt)
 
-    await query.message.reply_text(f"SCRIPT:\n\n{script}")
-    await query.message.reply_text(f"IMAGE PROMPT:\n\n{image_prompt}")
-    await query.message.reply_text(f"VIDEO PROMPT:\n\n{video_prompt}")
+    await query.message.reply_text(f"🎬 VIDEO PROMPT\n━━━━━━━━━━━━━━━\n\n{video_prompt}")
 
-    await query.message.reply_text("Use /start to make another one.")
+    await query.message.reply_text("✅ Done. Use /start to make another one.")
 
 
 def parse_numbered_list(text: str) -> list[str]:

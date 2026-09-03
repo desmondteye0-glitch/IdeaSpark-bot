@@ -22,105 +22,218 @@ logger = logging.getLogger(__name__)
 
 user_state = {}
 
-PLATFORM_PROMPTS = {
-    "tiktok": (
-        "Generate 5 TikTok content ideas about '{topic}'. "
-        "For each idea give: a scroll-stopping hook (first line of the video), "
-        "a one-sentence concept, and a suggested format (e.g. talking head, "
-        "voiceover + b-roll, POV, before/after). Keep it punchy, under 15 seconds "
-        "of concept each. Number them 1-5."
-    ),
-    "instagram": (
-        "Generate 5 Instagram content ideas about '{topic}'. "
-        "For each idea give: a caption hook, whether it works better as a "
-        "single image, carousel, or Reel, and a one-sentence visual concept. "
-        "Number them 1-5."
-    ),
-    "youtube": (
-        "Generate 5 YouTube video ideas about '{topic}'. "
-        "For each idea give: a clickable title (under 60 characters), "
-        "a one-sentence angle/hook for the first 10 seconds, and whether it "
-        "fits better as a Short or long-form video. Number them 1-5."
-    ),
-}
-
 PLATFORM_LABELS = {
     "tiktok": "TikTok",
     "instagram": "Instagram",
     "youtube": "YouTube",
 }
 
+TONE_LABELS = {
+    "funny": "Funny / Casual",
+    "serious": "Serious / Authoritative",
+    "educational": "Educational / How-to",
+}
+
+LENGTH_LABELS = {
+    "short": "Short (15-30 sec)",
+    "medium": "Medium (30-60 sec)",
+    "long": "Long (60-90 sec)",
+}
+
+
+def call_gemini(prompt: str) -> str:
+    response = model.generate_content(prompt)
+    return response.text.strip()
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton(label, callback_data=key)]
+        [InlineKeyboardButton(label, callback_data=f"platform:{key}")]
         for key, label in PLATFORM_LABELS.items()
     ]
     await update.message.reply_text(
-        "Pick a platform to get content ideas for:",
+        "Pick a platform to get started:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
-async def platform_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    platform = query.data
-    user_state[query.from_user.id] = {"platform": platform}
-    await query.edit_message_text(
-        f"{PLATFORM_LABELS[platform]} selected.\n\n"
-        f"Send me a topic or niche (e.g. skincare for men, personal finance, "
-        f"my dogs daily life) and I will generate ideas. "
-        f"Or just send surprise me."
+async def send_niches(query, context, platform):
+    await query.message.chat.send_action("typing")
+    prompt = (
+        f"Generate 10 distinct, specific content niches for {PLATFORM_LABELS[platform]}. "
+        "Each should be a short 2-5 word niche name (e.g. 'Budget meal prep', "
+        "'Dog training tips', 'Vintage fashion finds'). "
+        "Return ONLY a numbered list 1-10, no extra text, no descriptions."
     )
+    niches_text = call_gemini(prompt)
+    niches = parse_numbered_list(niches_text)
 
-
-async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    state = user_state.get(user_id)
-
-    if not state or "platform" not in state:
-        await update.message.reply_text(
-            "Use /start first to pick a platform (TikTok, Instagram, or YouTube)."
-        )
-        return
-
-    topic = update.message.text.strip()
-    platform = state["platform"]
-
-    await update.message.chat.send_action("typing")
-
-    prompt_template = PLATFORM_PROMPTS[platform]
-    prompt = prompt_template.format(topic=topic)
-
-    try:
-        response = model.generate_content(prompt)
-        ideas_text = response.text
-    except Exception as e:
-        logger.exception("Gemini API error")
-        await update.message.reply_text(
-            "Something went wrong generating ideas. Try again in a moment."
-        )
-        return
-
-    await update.message.reply_text(ideas_text)
+    user_state[query.from_user.id]["niches"] = niches
 
     keyboard = [
-        [InlineKeyboardButton(label, callback_data=key)]
-        for key, label in PLATFORM_LABELS.items()
+        [InlineKeyboardButton(niche, callback_data=f"niche:{i}")]
+        for i, niche in enumerate(niches)
     ]
-    await update.message.reply_text(
-        "Want more? Send another topic, or pick a different platform:",
+    await query.message.reply_text(
+        "Pick a niche:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
+
+
+async def send_topics(query, context, platform, niche):
+    await query.message.chat.send_action("typing")
+    prompt = (
+        f"Generate 10 specific {PLATFORM_LABELS[platform]} content topic ideas "
+        f"within the niche '{niche}'. Each should be a short, specific concept "
+        "(under 12 words). Return ONLY a numbered list 1-10, no extra text."
+    )
+    topics_text = call_gemini(prompt)
+    topics = parse_numbered_list(topics_text)
+
+    user_state[query.from_user.id]["topics"] = topics
+
+    keyboard = [
+        [InlineKeyboardButton(topic[:40], callback_data=f"topic:{i}")]
+        for i, topic in enumerate(topics)
+    ]
+    await query.message.reply_text(
+        "Pick a topic:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def ask_tone(query, context):
+    keyboard = [
+        [InlineKeyboardButton(label, callback_data=f"tone:{key}")]
+        for key, label in TONE_LABELS.items()
+    ]
+    await query.message.reply_text(
+        "What tone do you want?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def ask_length(query, context):
+    keyboard = [
+        [InlineKeyboardButton(label, callback_data=f"length:{key}")]
+        for key, label in LENGTH_LABELS.items()
+    ]
+    await query.message.reply_text(
+        "How long should the script be?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def generate_full_package(query, context, state):
+    await query.message.chat.send_action("typing")
+
+    platform = PLATFORM_LABELS[state["platform"]]
+    topic = state["topics"][state["topic_index"]]
+    tone = TONE_LABELS[state["tone"]]
+    length = LENGTH_LABELS[state["length"]]
+
+    script_prompt = (
+        f"Write a {platform} video script about: '{topic}'. "
+        f"Tone: {tone}. Length target: {length}. "
+        "This must NOT read like a generic ad or textbook script. Write it like "
+        "a real person talking to camera, with natural speech texture: include "
+        "bracketed reaction cues like [chuckles], [pause], [sighs], [laughs], "
+        "false starts, and casual phrasing where it fits the tone. "
+        "Format as a line-by-line script with speaker cues and stage directions "
+        "in brackets. Do not add any preamble or explanation, just the script."
+    )
+    script = call_gemini(script_prompt)
+
+    image_prompt_prompt = (
+        f"Write one detailed AI image-generation prompt (for tools like Midjourney "
+        f"or DALL-E) for a thumbnail or key visual for this {platform} video about "
+        f"'{topic}'. Describe subject, style, lighting, composition. "
+        "Return ONLY the prompt text, no extra commentary."
+    )
+    image_prompt = call_gemini(image_prompt_prompt)
+
+    video_prompt_prompt = (
+        f"Here is a video script:\n\n{script}\n\n"
+        f"Write one detailed AI video-generation prompt (for tools like Runway, "
+        f"Luma, or Sora) that brings this exact script to life as a video. "
+        "The prompt must describe: the setting/scene, what the character looks "
+        "like, the specific actions the character performs (matching the stage "
+        "directions and reactions in the script above), and the exact dialogue "
+        "lines the character should be saying at each moment, in sync with those "
+        "actions. Keep the dialogue verbatim from the script. Describe camera "
+        "movement, pacing, and mood throughout. "
+        "Return ONLY the prompt text, no extra commentary."
+    )
+    video_prompt = call_gemini(video_prompt_prompt)
+
+    await query.message.reply_text(f"SCRIPT:\n\n{script}")
+    await query.message.reply_text(f"IMAGE PROMPT:\n\n{image_prompt}")
+    await query.message.reply_text(f"VIDEO PROMPT:\n\n{video_prompt}")
+
+    await query.message.reply_text("Use /start to make another one.")
+
+
+def parse_numbered_list(text: str) -> list[str]:
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    items = []
+    for line in lines:
+        cleaned = line
+        for sep in [". ", ") ", " - "]:
+            if sep in cleaned[:5]:
+                cleaned = cleaned.split(sep, 1)[1]
+                break
+        cleaned = cleaned.strip("*# ")
+        if cleaned:
+            items.append(cleaned)
+    return items[:10] if len(items) >= 10 else items
+
+
+async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    data = query.data
+
+    if user_id not in user_state:
+        user_state[user_id] = {}
+    state = user_state[user_id]
+
+    action, _, value = data.partition(":")
+
+    if action == "platform":
+        state["platform"] = value
+        await query.edit_message_text(f"Platform: {PLATFORM_LABELS[value]}")
+        await send_niches(query, context, value)
+
+    elif action == "niche":
+        index = int(value)
+        niche = state["niches"][index]
+        state["niche"] = niche
+        await query.edit_message_text(f"Niche: {niche}")
+        await send_topics(query, context, state["platform"], niche)
+
+    elif action == "topic":
+        index = int(value)
+        state["topic_index"] = index
+        await query.edit_message_text(f"Topic: {state['topics'][index]}")
+        await ask_tone(query, context)
+
+    elif action == "tone":
+        state["tone"] = value
+        await query.edit_message_text(f"Tone: {TONE_LABELS[value]}")
+        await ask_length(query, context)
+
+    elif action == "length":
+        state["length"] = value
+        await query.edit_message_text(f"Length: {LENGTH_LABELS[value]}")
+        await generate_full_package(query, context, state)
 
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(platform_chosen))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_topic))
+    app.add_handler(CallbackQueryHandler(button_router))
 
     logger.info("Bot starting...")
     app.run_polling()

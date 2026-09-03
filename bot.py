@@ -40,6 +40,19 @@ LENGTH_LABELS = {
     "long": "Long (60-90 sec)",
 }
 
+FIXED_NICHES = [
+    "Wealth & Money",
+    "Health & Wellness",
+    "Psychology",
+    "Dark History",
+    "Football",
+    "Luxury Lifestyle",
+    "Mystery & Unsolved Cases",
+    "Technology & AI",
+    "Cars & Supercars",
+    "Interesting Facts",
+]
+
 
 def call_gemini(prompt: str) -> str:
     response = model.generate_content(prompt)
@@ -58,21 +71,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_niches(query, context, platform):
-    await query.message.chat.send_action("typing")
-    prompt = (
-        f"Generate 10 distinct, specific content niches for {PLATFORM_LABELS[platform]}. "
-        "Each should be a short 2-5 word niche name (e.g. 'Budget meal prep', "
-        "'Dog training tips', 'Vintage fashion finds'). "
-        "Return ONLY a numbered list 1-10, no extra text, no descriptions."
-    )
-    niches_text = call_gemini(prompt)
-    niches = parse_numbered_list(niches_text)
-
-    user_state[query.from_user.id]["niches"] = niches
+    user_state[query.from_user.id]["niches"] = FIXED_NICHES
 
     keyboard = [
         [InlineKeyboardButton(niche, callback_data=f"niche:{i}")]
-        for i, niche in enumerate(niches)
+        for i, niche in enumerate(FIXED_NICHES)
     ]
     await query.message.reply_text(
         "Pick a niche:",
